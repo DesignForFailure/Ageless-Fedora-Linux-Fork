@@ -139,9 +139,7 @@ This script runs as root and modifies system identity files. The following safeg
 
 ## Legal Disclaimer
 
-**This software is provided for educational, satirical, and political commentary purposes.** It is a statement about the practical implications of California's Digital Age Assurance Act (AB 1043) on operating system providers.
-
-By using this software, you acknowledge that:
+**By using this software, you acknowledge that:**
 
 1. You may become an "operating system provider" under California Civil Code § 1798.500(g).
 2. You may be subject to civil penalties under § 1798.503(a) of up to **$2,500 per affected child** per negligent violation, or **$7,500 per affected child** per intentional violation.
