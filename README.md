@@ -51,8 +51,9 @@ Ageless Linux then proceeds to provide **none** of the age verification infrastr
 **None.** This script requires only:
 
 - **Bash** (version 4.0+, for `${var,,}` lowercase expansion)
-- Standard coreutils: `grep`, `cut`, `cp`, `mkdir`, `chmod`, `cat`
+- Standard coreutils: `grep`, `cut`, `cp`, `mkdir`, `chmod`, `cat`, `mktemp`, `mv`, `head`
 - Root access (`sudo`)
+- An interactive terminal (the script requires informed consent via interactive prompts)
 
 No packages need to be installed. No network access is required.
 
@@ -73,6 +74,15 @@ sudo ./become-ageless.sh --flagrant
 ```
 
 Flagrant mode removes the fig leaf entirely. **No API is installed.** No interface of any kind exists for age collection. The system actively declares, in machine-readable form, that it refuses to comply. This mode is intended for devices that will be physically handed to children.
+
+### Other Options
+
+```bash
+sudo ./become-ageless.sh --help      # Show usage information
+sudo ./become-ageless.sh --version   # Show version
+```
+
+Unknown arguments are rejected with an error to prevent accidental misconfiguration (e.g., a `--flgrant` typo silently running in standard mode).
 
 ## What It Does
 
@@ -112,6 +122,20 @@ On Fedora/RHEL systems, also restore any additional release files:
 | `/etc/ageless/ab1043-compliance.txt` | (Non)compliance statement |
 | `/etc/ageless/age-verification-api.sh` | Nonfunctional stub API (standard mode) |
 | `/etc/ageless/REFUSAL` | Machine-readable refusal (flagrant mode) |
+
+## Security Considerations
+
+This script runs as root and modifies system identity files. The following safeguards are in place:
+
+- **`umask 022`** is set before creating any files, ensuring files in `/etc/` are never world-writable regardless of the calling environment
+- **Atomic file writes** — system files (`/etc/os-release`, release files) are written to a temp file first, then atomically renamed via `mv`, preventing corruption if interrupted mid-write
+- **Signal trap** — if interrupted (Ctrl+C / SIGTERM) during conversion, the script warns the user about the inconsistent state and provides recovery instructions
+- **Interactive terminal required** — the script refuses to run with piped/redirected stdin, ensuring the legal consent prompts cannot be bypassed
+- **Strict argument parsing** — unknown flags are rejected with an error, preventing typos like `--flgrant` from silently running the wrong mode
+- **Precise distro detection** — only the `ID=` and `ID_LIKE=` fields of `/etc/os-release` are matched, preventing false positives from URLs or descriptions containing distro names
+- **Backup-before-modify** — original system files are backed up before any modifications, with clear restore instructions
+
+**Note:** This script intentionally modifies `/etc/os-release` and related system identity files. This may affect package managers, monitoring tools, and cloud infrastructure agents that depend on accurate OS identification. Understand the implications before running on production systems.
 
 ## Legal Disclaimer
 

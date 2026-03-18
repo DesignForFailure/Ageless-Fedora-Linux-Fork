@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 #  become-ageless.sh — Ageless Linux Distribution Conversion Tool
-#  Version 1.1.0-fedora
+#  Version 1.2.0-fedora
 #
 #  Fedora Linux Fork
 #  Forked from: Ageless Linux (https://agelesslinux.org)
@@ -28,6 +28,11 @@
 
 set -euo pipefail
 
+# ── Secure file creation permissions ───────────────────────────────────────
+# Ensure files created in /etc/ are not world-writable, regardless of the
+# calling environment's umask.
+umask 022
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -35,13 +40,95 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-AGELESS_VERSION="1.1.0"
+AGELESS_VERSION="1.2.0"
 AGELESS_CODENAME="Timeless"
 FLAGRANT=0
+CONVERSION_STARTED=0
 
-if [[ "${1:-}" == "--flagrant" ]]; then
-    FLAGRANT=1
-fi
+# ── Argument parsing ──────────────────────────────────────────────────────
+
+usage() {
+    echo "Usage: sudo $0 [OPTIONS]"
+    echo ""
+    echo "Convert your Linux installation to Ageless Linux."
+    echo ""
+    echo "Options:"
+    echo "  --flagrant    Enable flagrant mode (no API stub, explicit refusal)"
+    echo "  --help        Show this help message"
+    echo "  --version     Show version information"
+    echo ""
+    echo "For more information, see: https://github.com/DesignForFailure/Ageless-Fedora-Linux-Fork"
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --flagrant)
+            FLAGRANT=1
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --version|-V)
+            echo "Ageless Linux Distribution Conversion Tool v${AGELESS_VERSION}"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}ERROR:${NC} Unknown option: $arg"
+            echo ""
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+# ── Cleanup trap for interrupted conversions ──────────────────────────────
+# If the script is interrupted after backup but before completion, warn the
+# user so they know the system may be in an inconsistent state.
+
+cleanup_on_interrupt() {
+    echo "" >&2
+    if [[ $CONVERSION_STARTED -eq 1 ]]; then
+        echo -e "${RED}WARNING:${NC} Conversion was interrupted!" >&2
+        echo "  Your system may be in an inconsistent state." >&2
+        echo "  To restore your original OS identity:" >&2
+        echo "    sudo cp /etc/os-release.pre-ageless /etc/os-release" >&2
+        echo "  Also restore any .pre-ageless backups in /etc/ if they exist." >&2
+    else
+        echo "Interrupted. No system files were modified." >&2
+    fi
+    exit 130
+}
+
+trap cleanup_on_interrupt INT TERM
+
+# ── Helper: parse os-release values ───────────────────────────────────────
+# Handles both quoted (NAME="Fedora Linux") and unquoted (NAME=Fedora) values.
+
+get_os_release_value() {
+    local key="$1"
+    local file="$2"
+    local value
+    value=$(grep "^${key}=" "$file" 2>/dev/null | head -1 | cut -d'=' -f2-)
+    # Strip surrounding quotes if present
+    value="${value#\"}"
+    value="${value%\"}"
+    echo "$value"
+}
+
+# ── Helper: atomic file write ─────────────────────────────────────────────
+# Write to a temp file in the same filesystem, then atomically rename.
+# This prevents corrupted files if interrupted mid-write.
+
+atomic_write() {
+    local target="$1"
+    local content="$2"
+    local tmpfile
+    tmpfile=$(mktemp "${target}.tmp.XXXXXX")
+    echo "$content" > "$tmpfile"
+    chmod --reference="$target" "$tmpfile" 2>/dev/null || chmod 644 "$tmpfile"
+    mv -f "$tmpfile" "$target"
+}
 
 cat << 'BANNER'
 
@@ -94,13 +181,33 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
+# Require an interactive terminal for the consent prompts.
+# Running this non-interactively would bypass the legal acknowledgement.
+if [[ ! -t 0 ]]; then
+    echo -e "${RED}ERROR:${NC} This script must be run from an interactive terminal."
+    echo ""
+    echo "  The legal notices in this script require informed consent."
+    echo "  Piping input or running non-interactively would bypass those"
+    echo "  protections. Please run this script directly in a terminal."
+    exit 1
+fi
+
+# Detect distro by matching the ID= and ID_LIKE= fields only, not the
+# entire os-release file. This prevents false positives from URLs or
+# descriptions that happen to contain distro names.
 DETECTED_DISTRO_FAMILY="unknown"
-if grep -qi "fedora" /etc/os-release 2>/dev/null; then
-    DETECTED_DISTRO_FAMILY="fedora"
-elif grep -qi "rhel\|centos\|rocky\|alma\|oracle" /etc/os-release 2>/dev/null; then
-    DETECTED_DISTRO_FAMILY="rhel"
-elif grep -qi "debian\|ubuntu" /etc/os-release 2>/dev/null; then
-    DETECTED_DISTRO_FAMILY="debian"
+if [[ -f /etc/os-release ]]; then
+    OS_ID=$(get_os_release_value "ID" /etc/os-release)
+    OS_ID_LIKE=$(get_os_release_value "ID_LIKE" /etc/os-release)
+    OS_IDS="${OS_ID} ${OS_ID_LIKE}"
+
+    if [[ "$OS_IDS" =~ fedora ]]; then
+        DETECTED_DISTRO_FAMILY="fedora"
+    elif [[ "$OS_IDS" =~ (rhel|centos|rocky|alma|oracle) ]]; then
+        DETECTED_DISTRO_FAMILY="rhel"
+    elif [[ "$OS_IDS" =~ (debian|ubuntu) ]]; then
+        DETECTED_DISTRO_FAMILY="debian"
+    fi
 fi
 
 if [[ "$DETECTED_DISTRO_FAMILY" == "unknown" ]]; then
@@ -161,6 +268,9 @@ echo ""
 echo -e "${GREEN}Converting system to Ageless Linux...${NC}"
 echo ""
 
+# Mark conversion as started (used by the interrupt trap)
+CONVERSION_STARTED=1
+
 # ── Back up original os-release ──────────────────────────────────────────────
 
 BACKUP_PATH="/etc/os-release.pre-ageless"
@@ -173,8 +283,10 @@ fi
 
 # ── Detect base distro info ──────────────────────────────────────────────────
 
-BASE_NAME=$(grep "^NAME=" /etc/os-release.pre-ageless | cut -d'"' -f2 || echo "Unknown")
-BASE_VERSION=$(grep "^VERSION_ID=" /etc/os-release.pre-ageless | cut -d'"' -f2 || echo "unknown")
+BASE_NAME=$(get_os_release_value "NAME" /etc/os-release.pre-ageless)
+BASE_VERSION=$(get_os_release_value "VERSION_ID" /etc/os-release.pre-ageless)
+BASE_NAME="${BASE_NAME:-Unknown}"
+BASE_VERSION="${BASE_VERSION:-unknown}"
 
 # ── Write new os-release ─────────────────────────────────────────────────────
 
@@ -196,23 +308,23 @@ case "$DETECTED_DISTRO_FAMILY" in
     *)       ID_LIKE_VALUE="linux" ;;
 esac
 
-cat > /etc/os-release << EOF
-PRETTY_NAME="Ageless Linux ${AGELESS_VERSION} (${AGELESS_CODENAME})"
-NAME="Ageless Linux"
-VERSION_ID="${AGELESS_VERSION}"
-VERSION="${AGELESS_VERSION} (${AGELESS_CODENAME})"
+OS_RELEASE_CONTENT="PRETTY_NAME=\"Ageless Linux ${AGELESS_VERSION} (${AGELESS_CODENAME})\"
+NAME=\"Ageless Linux\"
+VERSION_ID=\"${AGELESS_VERSION}\"
+VERSION=\"${AGELESS_VERSION} (${AGELESS_CODENAME})\"
 VERSION_CODENAME=${AGELESS_CODENAME,,}
 ID=ageless
-ID_LIKE="${ID_LIKE_VALUE}"
-HOME_URL="https://agelesslinux.org"
-SUPPORT_URL="https://agelesslinux.org#compliance"
-BUG_REPORT_URL="https://agelesslinux.org#faq"
-AGELESS_BASE_DISTRO="${BASE_NAME}"
-AGELESS_BASE_VERSION="${BASE_VERSION}"
-AGELESS_AB1043_COMPLIANCE="${COMPLIANCE_STATUS}"
-AGELESS_AGE_VERIFICATION_API="${API_STATUS}"
-AGELESS_AGE_VERIFICATION_STATUS="${VERIFICATION_STATUS}"
-EOF
+ID_LIKE=\"${ID_LIKE_VALUE}\"
+HOME_URL=\"https://agelesslinux.org\"
+SUPPORT_URL=\"https://agelesslinux.org#compliance\"
+BUG_REPORT_URL=\"https://agelesslinux.org#faq\"
+AGELESS_BASE_DISTRO=\"${BASE_NAME}\"
+AGELESS_BASE_VERSION=\"${BASE_VERSION}\"
+AGELESS_AB1043_COMPLIANCE=\"${COMPLIANCE_STATUS}\"
+AGELESS_AGE_VERIFICATION_API=\"${API_STATUS}\"
+AGELESS_AGE_VERIFICATION_STATUS=\"${VERIFICATION_STATUS}\""
+
+atomic_write /etc/os-release "$OS_RELEASE_CONTENT"
 
 echo -e "  [${GREEN}✓${NC}] Wrote new /etc/os-release"
 
@@ -222,40 +334,27 @@ if [[ -f /etc/lsb-release ]]; then
     if [[ ! -f /etc/lsb-release.pre-ageless ]]; then
         cp /etc/lsb-release /etc/lsb-release.pre-ageless
     fi
-    cat > /etc/lsb-release << EOF
-DISTRIB_ID=Ageless
+    LSB_CONTENT="DISTRIB_ID=Ageless
 DISTRIB_RELEASE=${AGELESS_VERSION}
 DISTRIB_CODENAME=${AGELESS_CODENAME,,}
-DISTRIB_DESCRIPTION="Ageless Linux ${AGELESS_VERSION} (${AGELESS_CODENAME})"
-EOF
+DISTRIB_DESCRIPTION=\"Ageless Linux ${AGELESS_VERSION} (${AGELESS_CODENAME})\""
+    atomic_write /etc/lsb-release "$LSB_CONTENT"
     echo -e "  [${GREEN}✓${NC}] Updated /etc/lsb-release"
 fi
 
 # ── Handle Fedora/RHEL-specific release files ────────────────────────────────
 
-if [[ -f /etc/system-release ]]; then
-    if [[ ! -f /etc/system-release.pre-ageless ]]; then
-        cp /etc/system-release /etc/system-release.pre-ageless
-    fi
-    echo "Ageless Linux release ${AGELESS_VERSION} (${AGELESS_CODENAME})" > /etc/system-release
-    echo -e "  [${GREEN}✓${NC}] Updated /etc/system-release"
-fi
+RELEASE_LINE="Ageless Linux release ${AGELESS_VERSION} (${AGELESS_CODENAME})"
 
-if [[ -f /etc/redhat-release ]]; then
-    if [[ ! -f /etc/redhat-release.pre-ageless ]]; then
-        cp /etc/redhat-release /etc/redhat-release.pre-ageless
+for release_file in /etc/system-release /etc/redhat-release /etc/fedora-release; do
+    if [[ -f "$release_file" ]]; then
+        if [[ ! -f "${release_file}.pre-ageless" ]]; then
+            cp "$release_file" "${release_file}.pre-ageless"
+        fi
+        atomic_write "$release_file" "$RELEASE_LINE"
+        echo -e "  [${GREEN}✓${NC}] Updated ${release_file}"
     fi
-    echo "Ageless Linux release ${AGELESS_VERSION} (${AGELESS_CODENAME})" > /etc/redhat-release
-    echo -e "  [${GREEN}✓${NC}] Updated /etc/redhat-release"
-fi
-
-if [[ -f /etc/fedora-release ]]; then
-    if [[ ! -f /etc/fedora-release.pre-ageless ]]; then
-        cp /etc/fedora-release /etc/fedora-release.pre-ageless
-    fi
-    echo "Ageless Linux release ${AGELESS_VERSION} (${AGELESS_CODENAME})" > /etc/fedora-release
-    echo -e "  [${GREEN}✓${NC}] Updated /etc/fedora-release"
-fi
+done
 
 # ── Create the (non)compliance notice ────────────────────────────────────────
 
@@ -405,6 +504,9 @@ APIEOF
 chmod +x /etc/ageless/age-verification-api.sh
 echo -e "  [${GREEN}✓${NC}] Installed age verification API (nonfunctional, as intended)"
 fi
+
+# Conversion is complete — clear the interrupt warning flag
+CONVERSION_STARTED=0
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 
