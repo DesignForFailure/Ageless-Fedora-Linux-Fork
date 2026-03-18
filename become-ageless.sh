@@ -1,10 +1,17 @@
 #!/bin/bash
 # ============================================================================
 #  become-ageless.sh — Ageless Linux Distribution Conversion Tool
-#  Version 1.0.0
+#  Version 1.1.0-fedora
 #
-#  This script converts your existing Debian installation into
-#  Ageless Linux, a California-regulated operating system.
+#  Fedora Linux Fork
+#  Forked from: Ageless Linux (https://agelesslinux.org)
+#  Original author: |VOID| (rowlandkhd@gmail.com)
+#  Fork maintainer: DesignForFailure
+#  Fork repository: https://github.com/DesignForFailure/Ageless-Fedora-Linux-Fork
+#
+#  This script converts your existing Fedora, RHEL, CentOS, or other
+#  RPM-based Linux installation into Ageless Linux, a California-regulated
+#  operating system. Debian/Ubuntu systems are also supported.
 #
 #  By running this script, the person or entity who controls this
 #  device becomes an "operating system provider" as defined by
@@ -28,7 +35,7 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-AGELESS_VERSION="1.0.0"
+AGELESS_VERSION="1.1.0"
 AGELESS_CODENAME="Timeless"
 FLAGRANT=0
 
@@ -87,18 +94,32 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-if ! grep -qi "debian\|ubuntu" /etc/os-release 2>/dev/null; then
-    echo -e "${YELLOW}WARNING:${NC} This does not appear to be a Debian-based system."
+DETECTED_DISTRO_FAMILY="unknown"
+if grep -qi "fedora" /etc/os-release 2>/dev/null; then
+    DETECTED_DISTRO_FAMILY="fedora"
+elif grep -qi "rhel\|centos\|rocky\|alma\|oracle" /etc/os-release 2>/dev/null; then
+    DETECTED_DISTRO_FAMILY="rhel"
+elif grep -qi "debian\|ubuntu" /etc/os-release 2>/dev/null; then
+    DETECTED_DISTRO_FAMILY="debian"
+fi
+
+if [[ "$DETECTED_DISTRO_FAMILY" == "unknown" ]]; then
+    echo -e "${YELLOW}WARNING:${NC} This does not appear to be a supported system."
     echo ""
-    echo "  Ageless Linux is a Debian-based distribution. Converting a"
-    echo "  non-Debian system would make you the provider of TWO operating"
-    echo "  systems, doubling your potential liability under AB 1043."
+    echo "  This fork of Ageless Linux supports Fedora, RHEL, CentOS,"
+    echo "  Rocky Linux, AlmaLinux, Debian, and Ubuntu."
+    echo ""
+    echo "  Converting an unsupported system would make you the provider"
+    echo "  of TWO operating systems, doubling your potential liability"
+    echo "  under AB 1043."
     echo ""
     read -rp "  Proceed anyway and accept double the legal risk? [y/N] " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         echo "  Wise choice. Exiting."
         exit 0
     fi
+else
+    echo -e "  [${GREEN}✓${NC}] Detected distribution family: ${DETECTED_DISTRO_FAMILY}"
 fi
 
 echo -e "${BOLD}LEGAL NOTICE${NC}"
@@ -167,6 +188,14 @@ else
     VERIFICATION_STATUS="intentionally noncompliant"
 fi
 
+# Determine ID_LIKE based on detected distro family
+case "$DETECTED_DISTRO_FAMILY" in
+    fedora)  ID_LIKE_VALUE="fedora" ;;
+    rhel)    ID_LIKE_VALUE="rhel fedora" ;;
+    debian)  ID_LIKE_VALUE="debian" ;;
+    *)       ID_LIKE_VALUE="linux" ;;
+esac
+
 cat > /etc/os-release << EOF
 PRETTY_NAME="Ageless Linux ${AGELESS_VERSION} (${AGELESS_CODENAME})"
 NAME="Ageless Linux"
@@ -174,7 +203,7 @@ VERSION_ID="${AGELESS_VERSION}"
 VERSION="${AGELESS_VERSION} (${AGELESS_CODENAME})"
 VERSION_CODENAME=${AGELESS_CODENAME,,}
 ID=ageless
-ID_LIKE=debian
+ID_LIKE="${ID_LIKE_VALUE}"
 HOME_URL="https://agelesslinux.org"
 SUPPORT_URL="https://agelesslinux.org#compliance"
 BUG_REPORT_URL="https://agelesslinux.org#faq"
@@ -200,6 +229,32 @@ DISTRIB_CODENAME=${AGELESS_CODENAME,,}
 DISTRIB_DESCRIPTION="Ageless Linux ${AGELESS_VERSION} (${AGELESS_CODENAME})"
 EOF
     echo -e "  [${GREEN}✓${NC}] Updated /etc/lsb-release"
+fi
+
+# ── Handle Fedora/RHEL-specific release files ────────────────────────────────
+
+if [[ -f /etc/system-release ]]; then
+    if [[ ! -f /etc/system-release.pre-ageless ]]; then
+        cp /etc/system-release /etc/system-release.pre-ageless
+    fi
+    echo "Ageless Linux release ${AGELESS_VERSION} (${AGELESS_CODENAME})" > /etc/system-release
+    echo -e "  [${GREEN}✓${NC}] Updated /etc/system-release"
+fi
+
+if [[ -f /etc/redhat-release ]]; then
+    if [[ ! -f /etc/redhat-release.pre-ageless ]]; then
+        cp /etc/redhat-release /etc/redhat-release.pre-ageless
+    fi
+    echo "Ageless Linux release ${AGELESS_VERSION} (${AGELESS_CODENAME})" > /etc/redhat-release
+    echo -e "  [${GREEN}✓${NC}] Updated /etc/redhat-release"
+fi
+
+if [[ -f /etc/fedora-release ]]; then
+    if [[ ! -f /etc/fedora-release.pre-ageless ]]; then
+        cp /etc/fedora-release /etc/fedora-release.pre-ageless
+    fi
+    echo "Ageless Linux release ${AGELESS_VERSION} (${AGELESS_CODENAME})" > /etc/fedora-release
+    echo -e "  [${GREEN}✓${NC}] Updated /etc/fedora-release"
 fi
 
 # ── Create the (non)compliance notice ────────────────────────────────────────
@@ -276,6 +331,8 @@ cat > /etc/ageless/ab1043-compliance.txt << 'EOF'
 
   To restore your previous operating system identity:
     sudo cp /etc/os-release.pre-ageless /etc/os-release
+    (On Fedora/RHEL, also restore /etc/system-release, /etc/redhat-release,
+     and /etc/fedora-release from their .pre-ageless backups if they exist.)
 
   To report this noncompliance to the California Attorney General:
     https://oag.ca.gov/contact/consumer-complaint-against-business-or-company
